@@ -183,22 +183,25 @@ impl Volcano {
         if valve_state.iter().all(|v| v.1 == &ValveState::Opened) {
             return 0;
         }
+
         let mut best_pressure = 0;
-        for next_valve in &valve_state {
-            if next_valve.1 == &ValveState::Opened {
+        for next_check in &valve_state {
+            let valve_name = next_check.0;
+            let valve_open = valve_state.get(valve_name).unwrap();
+            if valve_open == &ValveState::Opened {
                 continue;
             }
+            let flow_rate = self.valves.get(valve_name).unwrap().flow_rate;
             let mut candidate = valve_state.clone();
-            candidate.insert(next_valve.0.clone(), ValveState::Opened);
+            candidate.insert(valve_name.clone(), ValveState::Opened);
             // +1 minute to open the valve...
             let time_cost = self
                 .distance
-                .get(&(current_pos.clone(), next_valve.0.clone()))
+                .get(&(current_pos.clone(), valve_name.clone()))
                 .unwrap()
                 + 1;
-            let extra_pressure =
-                self.valves.get(&next_valve.0.clone()).unwrap().flow_rate * (remain - time_cost);
-            let valve_calc = self.brute_force(remain - time_cost, next_valve.0.clone(), candidate);
+            let extra_pressure = flow_rate * (remain - time_cost);
+            let valve_calc = self.brute_force(remain - time_cost, valve_name.clone(), candidate);
             if valve_calc + extra_pressure > best_pressure {
                 best_pressure = valve_calc + extra_pressure;
             }
@@ -215,17 +218,87 @@ impl Volcano {
         valve_state.insert("AA".to_string(), ValveState::Opened);
         self.brute_force(remain, "AA".to_string(), valve_state)
     }
+
+    fn all_partitions(&self) -> Vec<HashSet<String>> {
+        let mut result = vec![];
+        let valves: Vec<String> = self.valves.iter().map(|v| v.0.clone()).collect();
+
+        // Only need to iterate over len(valves)-1 bits; leave the top bit always
+        // clear as inverse is identical a pattern we've had.
+        for part_idx in 0..(1 << (valves.len() - 1)) {
+            // Heuristic: splitting the work evenly is probably going to be best.
+            // Therefore with 15 valves, we want roughly half of those 15 bits to
+            // be each binary value. Check there's between 6 and 9 ones.
+            // Not only does this reduce the number of partitions, it also makes
+            // testing them much faster, as neither set of the partition has more
+            // than 9 valves to visit.
+            if (part_idx as i32).count_ones() < 6 || (part_idx as i32).count_ones() > 9 {
+                continue;
+            }
+            let mut partition = HashSet::new();
+            for (idx, valve) in valves.iter().enumerate() {
+                if (part_idx & (1 << idx)) != 0 {
+                    partition.insert(valve.clone());
+                }
+            }
+            result.push(partition);
+        }
+
+        result
+    }
+
+    fn calculate_joint(&self, remain: i32) -> i32 {
+        let init_valve_state: HashMap<String, ValveState> = self
+            .valves
+            .iter()
+            .map(|v| (v.0.clone(), ValveState::Closed))
+            .collect();
+
+        let mut best_pressure = 0;
+
+        let all_partitions = self.all_partitions();
+        //println!("Testing {} partitions", all_partitions.len());
+
+        for (_idx, partition) in all_partitions.iter().enumerate() {
+            let mut my_valve_state = init_valve_state.clone();
+            let mut elephant_valve_state = init_valve_state.clone();
+
+            for valve_name in init_valve_state.keys() {
+                if partition.contains(valve_name) {
+                    my_valve_state.insert(valve_name.clone(), ValveState::Opened);
+                    elephant_valve_state.insert(valve_name.clone(), ValveState::Closed);
+                } else {
+                    my_valve_state.insert(valve_name.clone(), ValveState::Closed);
+                    elephant_valve_state.insert(valve_name.clone(), ValveState::Opened);
+                }
+            }
+
+            my_valve_state.insert("AA".to_string(), ValveState::Opened);
+            elephant_valve_state.insert("AA".to_string(), ValveState::Opened);
+
+            let partition_result = self.brute_force(remain, "AA".to_string(), my_valve_state)
+                + self.brute_force(remain, "AA".to_string(), elephant_valve_state);
+            if partition_result > best_pressure {
+                //println!("Partition# {}; best so far: {}", _idx, partition_result);
+                best_pressure = partition_result;
+            }
+        }
+
+        best_pressure
+    }
 }
 
 pub fn step1() {
     let mut volcano = Volcano::new("inputs/day16.txt");
-
-    //volcano.render_dot();
     volcano.reduce();
     //volcano.render_dot();
-
     volcano.calc_all_pairs_shortest();
-    println!("{}", volcano.calculate(30));
+    println!("Best pressure in 30 minutes: {}", volcano.calculate(30));
 }
 
-pub fn step2() {}
+pub fn step2() {
+    let mut volcano = Volcano::new("inputs/day16.txt");
+    volcano.reduce();
+    volcano.calc_all_pairs_shortest();
+    println!("With two valve openers in 26 minutes: {}", volcano.calculate_joint(26));
+}
